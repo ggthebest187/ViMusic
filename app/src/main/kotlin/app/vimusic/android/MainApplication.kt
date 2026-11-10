@@ -588,34 +588,40 @@ class MainApplication : Application(), SingletonImageLoader.Factory, Configurati
         private set
 
     override fun onCreate() {
-        StrictMode.setVmPolicy(
-            VmPolicy.Builder()
-                .let {
-                    if (isAtLeastAndroid12) it.detectUnsafeIntentLaunch()
-                    else it
-                }
-                .penaltyLog()
-                .penaltyDeath()
-                .build()
-        )
+            StrictMode.setVmPolicy(
+                VmPolicy.Builder()
+                    .let {
+                        if (isAtLeastAndroid12) it.detectUnsafeIntentLaunch()
+                        else it
+                    }
+                    .penaltyLog()
+                    .penaltyDeath()
+                    .build()
+            )
 
-        MonetCompat.debugLog = BuildConfig.DEBUG
-        super.onCreate()
+            MonetCompat.debugLog = BuildConfig.DEBUG
+            super.onCreate()
 
-        // MonetCompat registers its process-wide wallpaper receiver with the
-        // context passed to the first setup call. Initialize the singleton
-        // here so it never retains a MainActivity after configuration changes
-        // or process teardown.
-        MonetCompat.enablePaletteCompat()
-        MonetCompat.setup(applicationContext)
+            // MonetCompat registers its process-wide wallpaper receiver with the
+            // context passed to the first setup call. Initialize the singleton
+            // here so it never retains a MainActivity after configuration changes
+            // or process teardown.
+            MonetCompat.enablePaletteCompat()
+            MonetCompat.setup(applicationContext)
 
-        MainApplicationProvider.application = this
-        PlayerPreferences.migrateAndroidAutoSetting(this)
-        initializeHttpTransport(this)
-        appContainer = AppContainer(this).also(AppContainer::initialize)
-        ServiceNotifications.createAll(this)
-        DatabaseAutoBackupWorker.upsert(this)
-    }
+            MainApplicationProvider.application = this
+            PlayerPreferences.migrateAndroidAutoSetting(this)
+            initializeHttpTransport(this)
+            appContainer = AppContainer(this).also(AppContainer::initialize)
+            ServiceNotifications.createAll(this)
+            DatabaseAutoBackupWorker.upsert(this)
+        }
+
+        override fun onTerminate() {
+            super.onTerminate()
+            // Shutdown NewPipe extractor coroutine scope
+            NewPipeExtractorClient.shutdown()
+        }
 
     override fun newImageLoader(context: PlatformContext) = ImageLoader.Builder(this)
         .components {
