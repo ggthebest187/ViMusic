@@ -2,6 +2,10 @@ package app.vimusic.android.extractor
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Mutex
+import kotlinx.coroutines.SupervisorJob
 import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.ServiceList
@@ -24,8 +28,8 @@ import java.net.NoRouteToHostException
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -40,8 +44,16 @@ object NewPipeExtractorClient {
     private val inFlightAudioResolutionsLock = Any()
     private val inFlightAudioResolutions = mutableMapOf<String, FutureTask<NewPipeAudioResult>>()
     private val appContextRef = AtomicReference<Context?>()
+
+    // Mutex for shared mutable state to prevent race conditions
+    private val downloaderMutex = Mutex()
+    private val dnsIndexMutex = Mutex()
+
     @Volatile private var sharedSystemDownloader: Downloader? = null
     private var lastSuccessfulDnsIndex: Int? = null
+
+    // Use limited parallelism instead of unbounded cached thread pool
+    private val resolverScope = CoroutineScope(Dispatchers.IO.limitedParallelism(4) + SupervisorJob())
 
     fun ensureInitialized(context: Context) {
         appContextRef.set(context.applicationContext)
@@ -104,10 +116,13 @@ object NewPipeExtractorClient {
             }
         }.also { task ->
             inFlightAudioResolutions[videoId] = task
-            RESOLVER_EXECUTOR.execute {
-                task.run()
-                synchronized(inFlightAudioResolutionsLock) {
-                    inFlightAudioResolutions.remove(videoId, task)
+            resolverScope.launch {
+                try {
+                    task.run()
+                } finally {
+                    synchronized(inFlightAudioResolutionsLock) {
+                        inFlightAudioResolutions.remove(videoId, task)
+                    }
                 }
             }
         }
@@ -370,11 +385,15 @@ object NewPipeExtractorClient {
         return listOf(NewPipeDnsTarget.System) + resolvedTargets
     }
 
+    /** Shuts down the resolver coroutine scope. Call on app termination. */
+    fun shutdown() {
+        resolverScope.cancel()
+    }
+
     private const val TAG = "NewPipeExtractorClient"
     private const val DNS_RESOLVED_ADDRESS_ATTEMPTS = 4
     private const val PLAYBACK_RESOLVE_TIMEOUT_SECONDS = 45L
     private const val PRELOAD_RESOLVE_TIMEOUT_SECONDS = 5L
-    private val RESOLVER_EXECUTOR = Executors.newCachedThreadPool()
 }
 
 data class NewPipeAudioResult(
